@@ -4,7 +4,7 @@ Tags: seo, rank math, mcp, api, automation
 Requires at least: 6.9
 Tested up to: 7.0
 Requires PHP: 8.0
-Stable tag: 1.1.4
+Stable tag: 1.1.5
 License: GPLv2 or later
 License URI: https://www.gnu.org/licenses/gpl-2.0.html
 
@@ -85,6 +85,9 @@ This add-on plugin extends [MCP Expose Abilities](https://devenia.com/plugins/mc
 5. The abilities are now available via the MCP endpoint
 
 == Changelog ==
+
+= 1.1.5 =
+* Fixed: `rankmath/create-redirection` now rejects exact sources that normalize to the same path as the destination.
 
 = 1.1.4 =
 * Added: `rankmath/get-meta` and `rankmath/bulk-get-meta` now include the stored Rank Math SEO score as `seo_score`.

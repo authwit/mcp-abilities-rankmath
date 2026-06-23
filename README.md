@@ -8,7 +8,7 @@ Rank Math SEO abilities for MCP. Get and update meta descriptions, titles, focus
 [![PHP](https://img.shields.io/badge/PHP-8.0%2B-purple.svg)](https://php.net)
 
 **Tested up to:** 7.0
-**Stable tag:** 1.1.4
+**Stable tag:** 1.1.5
 **License:** GPLv2 or later
 **License URI:** https://www.gnu.org/licenses/gpl-2.0.html
 
@@ -179,6 +179,10 @@ If you skip base-stack verification and start with add-ons immediately, troubles
 ```
 
 ## Changelog
+
+### 1.1.5
+- Fixed: `rankmath/create-redirection` now rejects exact sources that normalize
+  to the same path as the destination
 
 ### 1.1.4
 - Added: `rankmath/get-meta` and `rankmath/bulk-get-meta` now include the stored Rank Math SEO score as `seo_score`

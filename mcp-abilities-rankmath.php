@@ -3,7 +3,7 @@
  * Plugin Name: MCP Abilities - Rank Math
  * Plugin URI: https://github.com/bjornfix/mcp-abilities-rankmath
  * Description: Rank Math SEO abilities for MCP. Get and update meta descriptions, titles, focus keywords, and other SEO settings.
- * Version: 1.1.4
+ * Version: 1.1.5
  * Author: Devenia
  * Author URI: https://devenia.com
  * License: GPL-2.0+
@@ -97,6 +97,54 @@ function mcp_rankmath_allowed_redirection_comparisons(): array {
  */
 function mcp_rankmath_allowed_redirection_headers(): array {
 	return array( 301, 302, 307, 308, 410, 451 );
+}
+
+/**
+ * Normalize a redirection target/source to a root-relative URL path.
+ *
+ * @param string $url URL or path.
+ * @return string
+ */
+function mcp_rankmath_normalized_redirection_path( string $url ): string {
+	$path = wp_parse_url( $url, PHP_URL_PATH );
+	if ( ! is_string( $path ) || '' === $path ) {
+		return '';
+	}
+
+	return '/' . trim( $path, '/' ) . '/';
+}
+
+/**
+ * Find exact sources that would redirect a path back to itself.
+ *
+ * @param array<int,array<string,string>> $sources Sources accepted by Rank Math.
+ * @param string                          $destination Destination URL/path.
+ * @return array<int,array<string,string>>
+ */
+function mcp_rankmath_self_redirect_sources( array $sources, string $destination ): array {
+	$destination_path = mcp_rankmath_normalized_redirection_path( $destination );
+	if ( '' === $destination_path ) {
+		return array();
+	}
+
+	$conflicts = array();
+	foreach ( $sources as $source ) {
+		$comparison = isset( $source['comparison'] ) ? (string) $source['comparison'] : 'exact';
+		if ( 'exact' !== $comparison ) {
+			continue;
+		}
+
+		$pattern = isset( $source['pattern'] ) ? (string) $source['pattern'] : '';
+		if ( '' !== $pattern && mcp_rankmath_normalized_redirection_path( $pattern ) === $destination_path ) {
+			$conflicts[] = array(
+				'pattern' => $pattern,
+				'comparison' => $comparison,
+				'destination_path' => $destination_path,
+			);
+		}
+	}
+
+	return $conflicts;
 }
 
 /**
@@ -2386,6 +2434,8 @@ function mcp_register_rankmath_abilities(): void {
 					'success' => array( 'type' => 'boolean' ),
 					'id'      => array( 'type' => 'integer' ),
 					'message' => array( 'type' => 'string' ),
+					'code'    => array( 'type' => 'string' ),
+					'conflicting_sources' => array( 'type' => 'array' ),
 				),
 			),
 			'execute_callback'    => function ( array $input ): array {
@@ -2462,6 +2512,16 @@ function mcp_register_rankmath_abilities(): void {
 					return array(
 						'success' => false,
 						'message' => 'No valid sources provided.',
+					);
+				}
+
+				$self_redirect_sources = mcp_rankmath_self_redirect_sources( $sources, $destination );
+				if ( ! empty( $self_redirect_sources ) && ! in_array( $header_code, array( 410, 451 ), true ) ) {
+					return array(
+						'success' => false,
+						'message' => 'Redirection source must not normalize to the same path as its destination.',
+						'code'    => 'rankmath_self_redirect_source',
+						'conflicting_sources' => $self_redirect_sources,
 					);
 				}
 
