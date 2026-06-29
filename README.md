@@ -8,7 +8,7 @@ Rank Math SEO abilities for MCP. Get and update meta descriptions, titles, focus
 [![PHP](https://img.shields.io/badge/PHP-8.0%2B-purple.svg)](https://php.net)
 
 **Tested up to:** 7.0
-**Stable tag:** 1.1.7
+**Stable tag:** 1.1.8
 **License:** GPLv2 or later
 **License URI:** https://www.gnu.org/licenses/gpl-2.0.html
 
@@ -16,7 +16,7 @@ Rank Math SEO abilities for MCP. Get and update meta descriptions, titles, focus
 
 Rank Math SEO abilities for MCP. Get and update meta descriptions, titles, focus keywords, and other SEO settings.
 
-This plugin is part of the Devenia MCP abilities ecosystem. It gives an MCP-capable agent a focused, authenticated way to work with Rank Math work inside WordPress through MCP.
+This plugin is part of the MCP abilities ecosystem. It gives an MCP-capable agent a focused, authenticated way to work with Rank Math work inside WordPress through MCP.
 
 **Example:** "Handle this WordPress maintenance task directly." - The agent can inspect the site, call the relevant ability, and return the result without making the human click through wp-admin for every step.
 
@@ -188,6 +188,11 @@ If you skip base-stack verification and start with add-ons immediately, troubles
 
 ## Changelog
 
+### 1.1.8
+- Refactored ability registration into focused include modules for options,
+  routes, site settings, content SEO, and logs/redirections. No MCP ability
+  names changed.
+
 ### 1.1.7
 - Added: content SEO audit, post schema, primary term, sitemap URL, and
   redirection-match abilities for broader Rank Math automation
@@ -263,7 +268,7 @@ GPL-2.0+
 
 ## Author
 
-[Devenia](https://devenia.com) - We've been doing SEO and web development since 1993.
+[basicus](https://profiles.wordpress.org/basicus/)
 
 ## Links
 
