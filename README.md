@@ -8,7 +8,7 @@ Rank Math SEO abilities for MCP. Get and update meta descriptions, titles, focus
 [![PHP](https://img.shields.io/badge/PHP-8.0%2B-purple.svg)](https://php.net)
 
 **Tested up to:** 7.0
-**Stable tag:** 1.1.6
+**Stable tag:** 1.1.7
 **License:** GPLv2 or later
 **License URI:** https://www.gnu.org/licenses/gpl-2.0.html
 
@@ -107,7 +107,7 @@ If you are new to the stack, use this order:
 
 If you skip base-stack verification and start with add-ons immediately, troubleshooting gets harder than it needs to be.
 
-## Abilities (24)
+## Abilities (31)
 
 | Ability | Description |
 |---------|-------------|
@@ -129,6 +129,13 @@ If you skip base-stack verification and start with add-ons immediately, troubles
 | `rankmath/update-meta` | Update SEO metadata (title, description, focus keyword, robots, canonical, flags, plus common aliases) |
 | `rankmath/bulk-get-meta` | Retrieve SEO metadata and stored SEO scores for multiple posts with filtering |
 | `rankmath/get-inbound-links` | Report internal inbound links to one target or list linked internal targets |
+| `rankmath/audit-content-seo` | Find content with missing SEO fields, noindex, low scores, missing schema, or weak inbound links |
+| `rankmath/get-post-schema` | Read Rank Math schema-related post meta |
+| `rankmath/update-post-schema` | Update or delete Rank Math `rank_math_schema_*` post meta |
+| `rankmath/get-primary-term` | Read the Rank Math primary term for a post taxonomy |
+| `rankmath/update-primary-term` | Set or clear the Rank Math primary term for a post taxonomy |
+| `rankmath/list-sitemap-urls` | Fetch sitemap index entries and child sitemap URLs |
+| `rankmath/find-redirection` | Find redirection rules matching one URL or path |
 | `rankmath/list-404-logs` | List recent Rank Math 404 log entries |
 | `rankmath/delete-404-logs` | Delete 404 log entries by ID |
 | `rankmath/clear-404-logs` | Clear all Rank Math 404 logs (requires confirm) |
@@ -180,6 +187,10 @@ If you skip base-stack verification and start with add-ons immediately, troubles
 ```
 
 ## Changelog
+
+### 1.1.7
+- Added: content SEO audit, post schema, primary term, sitemap URL, and
+  redirection-match abilities for broader Rank Math automation
 
 ### 1.1.6
 - Added: `rankmath/get-inbound-links` builds an internal inbound-link report

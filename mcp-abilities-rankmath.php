@@ -3,7 +3,7 @@
  * Plugin Name: MCP Abilities - Rank Math
  * Plugin URI: https://github.com/bjornfix/mcp-abilities-rankmath
  * Description: Rank Math SEO abilities for MCP. Get and update meta descriptions, titles, focus keywords, and other SEO settings.
- * Version: 1.1.6
+ * Version: 1.1.7
  * Author: Devenia
  * Author URI: https://devenia.com
  * License: GPL-2.0+
@@ -769,6 +769,253 @@ function mcp_rankmath_get_post_or_error( int $post_id, string $action ): array {
 }
 
 /**
+ * Get post types for content SEO audits.
+ *
+ * @param mixed $input Input value.
+ * @return array<int,string>
+ */
+function mcp_rankmath_get_content_audit_post_types( $input ): array {
+	$requested = is_array( $input ) ? $input : ( is_string( $input ) && '' !== $input ? array( $input ) : array() );
+	if ( empty( $requested ) ) {
+		$requested = array( 'post', 'page' );
+	}
+
+	return array_values(
+		array_unique(
+			array_filter(
+				array_map( 'sanitize_key', $requested ),
+				static function ( string $post_type ): bool {
+					return '' !== $post_type && post_type_exists( $post_type );
+				}
+			)
+		)
+	);
+}
+
+/**
+ * Get post statuses for content SEO audits.
+ *
+ * @param mixed $input Input value.
+ * @return array<int,string>
+ */
+function mcp_rankmath_get_content_audit_statuses( $input ): array {
+	$requested = is_array( $input ) ? $input : ( is_string( $input ) && '' !== $input ? array( $input ) : array() );
+	if ( empty( $requested ) ) {
+		$requested = array( 'publish' );
+	}
+
+	return array_values( array_unique( array_filter( array_map( 'sanitize_key', $requested ) ) ) );
+}
+
+/**
+ * Return Rank Math schema-related meta for one post.
+ *
+ * @param int $post_id Post ID.
+ * @return array<string,mixed>
+ */
+function mcp_rankmath_get_post_schema_meta( int $post_id ): array {
+	$schema = array();
+	foreach ( get_post_meta( $post_id ) as $key => $values ) {
+		if ( ! str_starts_with( (string) $key, 'rank_math_schema_' ) && ! in_array( $key, array( 'rank_math_rich_snippet', 'rank_math_snippet_name', 'rank_math_snippet_desc', 'rank_math_snippet_shortcode' ), true ) ) {
+			continue;
+		}
+
+		$schema[ $key ] = isset( $values[0] ) ? maybe_unserialize( $values[0] ) : '';
+	}
+
+	ksort( $schema );
+	return $schema;
+}
+
+/**
+ * Sanitize a schema meta value without destroying structured arrays.
+ *
+ * @param mixed $value Value from ability input.
+ * @return mixed
+ */
+function mcp_rankmath_sanitize_schema_value( $value ) {
+	if ( is_array( $value ) ) {
+		return map_deep( $value, 'sanitize_text_field' );
+	}
+
+	if ( is_bool( $value ) || is_int( $value ) || is_float( $value ) ) {
+		return $value;
+	}
+
+	if ( is_string( $value ) ) {
+		$decoded = json_decode( $value, true );
+		if ( JSON_ERROR_NONE === json_last_error() && is_array( $decoded ) ) {
+			return map_deep( $decoded, 'sanitize_text_field' );
+		}
+
+		return sanitize_textarea_field( $value );
+	}
+
+	return '';
+}
+
+/**
+ * Validate a Rank Math schema meta key without lowercasing it.
+ *
+ * Rank Math schema keys may contain case-sensitive schema names such as
+ * rank_math_schema_Article. sanitize_key() would silently change those keys.
+ *
+ * @param string $key Meta key.
+ * @return bool
+ */
+function mcp_rankmath_is_schema_meta_key( string $key ): bool {
+	return 1 === preg_match( '/^rank_math_schema_[A-Za-z0-9_-]+$/', $key );
+}
+
+/**
+ * Get Rank Math primary term data for one taxonomy.
+ *
+ * @param int    $post_id Post ID.
+ * @param string $taxonomy Taxonomy name.
+ * @return array<string,mixed>
+ */
+function mcp_rankmath_get_primary_term_data( int $post_id, string $taxonomy ): array {
+	$taxonomy = sanitize_key( $taxonomy );
+	if ( '' === $taxonomy || ! taxonomy_exists( $taxonomy ) ) {
+		return array( 'success' => false, 'message' => 'Taxonomy not found.' );
+	}
+
+	if ( ! is_object_in_taxonomy( get_post_type( $post_id ), $taxonomy ) ) {
+		return array( 'success' => false, 'message' => 'Taxonomy is not assigned to this post type.' );
+	}
+
+	$meta_key        = 'rank_math_primary_' . $taxonomy;
+	$primary_term_id = absint( get_post_meta( $post_id, $meta_key, true ) );
+	$terms          = get_the_terms( $post_id, $taxonomy );
+	$terms          = is_array( $terms ) ? $terms : array();
+	$term_items     = array();
+	$primary_term   = null;
+
+	foreach ( $terms as $term ) {
+		$term_url = get_term_link( $term );
+		$item = array(
+			'id'   => (int) $term->term_id,
+			'name' => $term->name,
+			'slug' => $term->slug,
+			'url'  => is_wp_error( $term_url ) ? '' : $term_url,
+		);
+		$term_items[] = $item;
+		if ( $primary_term_id === (int) $term->term_id ) {
+			$primary_term = $item;
+		}
+	}
+
+	return array(
+		'success'         => true,
+		'post_id'         => $post_id,
+		'taxonomy'        => $taxonomy,
+		'primary_meta_key' => $meta_key,
+		'primary_term_id' => $primary_term_id,
+		'primary_term'    => $primary_term,
+		'terms'           => $term_items,
+	);
+}
+
+/**
+ * Decode a Rank Math redirection source column.
+ *
+ * @param mixed $raw Raw DB value.
+ * @return array<int,array<string,mixed>>
+ */
+function mcp_rankmath_decode_redirection_sources( $raw ): array {
+	if ( is_array( $raw ) ) {
+		return $raw;
+	}
+
+	if ( ! is_string( $raw ) || '' === $raw ) {
+		return array();
+	}
+
+	$unserialized = maybe_unserialize( $raw );
+	if ( is_array( $unserialized ) ) {
+		return $unserialized;
+	}
+
+	$decoded = json_decode( $raw, true );
+	return is_array( $decoded ) ? $decoded : array();
+}
+
+/**
+ * Check whether one redirection source matches a URL path.
+ *
+ * @param array<string,mixed> $source Source object.
+ * @param string              $path Normalized path.
+ * @return bool
+ */
+function mcp_rankmath_redirection_source_matches_path( array $source, string $path ): bool {
+	$pattern = isset( $source['pattern'] ) ? (string) $source['pattern'] : '';
+	if ( '' === $pattern ) {
+		return false;
+	}
+
+	$comparison = isset( $source['comparison'] ) ? (string) $source['comparison'] : 'exact';
+	$ignore     = isset( $source['ignore'] ) ? (string) $source['ignore'] : '';
+	$case_fold  = 'case' === $ignore || ! empty( $source['ignore_case'] );
+	$haystack   = $case_fold ? strtolower( $path ) : $path;
+	$needle     = $case_fold ? strtolower( $pattern ) : $pattern;
+
+	if ( 'regex' !== $comparison ) {
+		$needle_path = mcp_rankmath_normalized_redirection_path( $needle );
+		if ( '' !== $needle_path ) {
+			$needle = $case_fold ? strtolower( $needle_path ) : $needle_path;
+		}
+	}
+
+	switch ( $comparison ) {
+		case 'contains':
+			return '' !== $needle && false !== strpos( $haystack, $needle );
+		case 'start':
+			return '' !== $needle && str_starts_with( $haystack, $needle );
+		case 'end':
+			return '' !== $needle && str_ends_with( untrailingslashit( $haystack ), untrailingslashit( $needle ) );
+		case 'regex':
+			$flags = $case_fold ? 'i' : '';
+			// phpcs:ignore WordPress.PHP.NoSilencedErrors.Discouraged -- Rank Math stores user regex patterns; invalid patterns should fail closed.
+			$result = @preg_match( '#' . str_replace( '#', '\#', $pattern ) . '#' . $flags, $path );
+			return 1 === $result;
+		case 'exact':
+		default:
+			return untrailingslashit( $haystack ) === untrailingslashit( $needle );
+	}
+}
+
+/**
+ * Parse XML sitemap loc values.
+ *
+ * @param string $body XML body.
+ * @return array<int,string>
+ */
+function mcp_rankmath_parse_sitemap_locs( string $body ): array {
+	if ( '' === trim( $body ) || ! function_exists( 'simplexml_load_string' ) ) {
+		return array();
+	}
+
+	$previous = libxml_use_internal_errors( true );
+	$xml      = simplexml_load_string( $body );
+	libxml_clear_errors();
+	libxml_use_internal_errors( $previous );
+
+	if ( false === $xml ) {
+		return array();
+	}
+
+	$locs = array();
+	foreach ( $xml->xpath( '//*[local-name()="loc"]' ) ?: array() as $loc ) {
+		$url = esc_url_raw( (string) $loc );
+		if ( '' !== $url ) {
+			$locs[] = $url;
+		}
+	}
+
+	return array_values( array_unique( $locs ) );
+}
+
+/**
  * Normalize an internal URL to a comparable path.
  *
  * Query strings and fragments are intentionally ignored. The workflow question
@@ -1058,6 +1305,87 @@ function mcp_rankmath_build_inbound_link_graph( array $input ): array {
 		'post_statuses'   => $post_statuses,
 		'target_paths'    => $target_paths,
 	);
+}
+
+/**
+ * Count inbound internal links for a known set of target posts.
+ *
+ * This keeps content audits local to the posts they are reporting instead of
+ * relying on a top-N sitewide inbound graph.
+ *
+ * @param array<int,int> $post_ids Target post IDs.
+ * @param array<string,mixed> $input Optional scan controls.
+ * @return array<int,int>
+ */
+function mcp_rankmath_get_inbound_counts_for_posts( array $post_ids, array $input = array() ): array {
+	$post_ids = array_values( array_unique( array_filter( array_map( 'absint', $post_ids ) ) ) );
+	if ( empty( $post_ids ) ) {
+		return array();
+	}
+
+	$post_types      = mcp_rankmath_get_inbound_scan_post_types( $input );
+	$post_statuses   = isset( $input['post_statuses'] ) && is_array( $input['post_statuses'] ) ? $input['post_statuses'] : array( 'publish' );
+	$post_statuses   = array_values( array_unique( array_map( 'sanitize_key', $post_statuses ) ) );
+	$include_menus   = array_key_exists( 'include_menus', $input ) ? (bool) $input['include_menus'] : true;
+	$target_by_path  = array();
+	$counts          = array();
+
+	foreach ( $post_ids as $post_id ) {
+		$path = mcp_rankmath_normalize_internal_link_path( get_permalink( $post_id ) );
+		if ( '' === $path ) {
+			continue;
+		}
+		$target_by_path[ $path ] = $post_id;
+		$counts[ $post_id ]      = 0;
+	}
+
+	if ( empty( $target_by_path ) ) {
+		return $counts;
+	}
+
+	$source_query = new WP_Query(
+		array(
+			'post_type'              => $post_types,
+			'post_status'            => $post_statuses,
+			'posts_per_page'         => -1,
+			'fields'                 => 'ids',
+			'no_found_rows'          => true,
+			'update_post_meta_cache' => false,
+			'update_post_term_cache' => false,
+		)
+	);
+
+	foreach ( $source_query->posts as $source_id ) {
+		$source_id = (int) $source_id;
+		$content   = (string) get_post_field( 'post_content', $source_id );
+		foreach ( mcp_rankmath_extract_internal_link_paths( $content ) as $path ) {
+			if ( ! isset( $target_by_path[ $path ] ) ) {
+				continue;
+			}
+			$target_id = (int) $target_by_path[ $path ];
+			if ( $source_id === $target_id ) {
+				continue;
+			}
+			++$counts[ $target_id ];
+		}
+	}
+
+	if ( $include_menus ) {
+		foreach ( wp_get_nav_menus() as $menu ) {
+			$items = wp_get_nav_menu_items( $menu->term_id );
+			if ( ! is_array( $items ) ) {
+				continue;
+			}
+			foreach ( $items as $item ) {
+				$path = mcp_rankmath_normalize_internal_link_path( (string) $item->url );
+				if ( isset( $target_by_path[ $path ] ) ) {
+					++$counts[ (int) $target_by_path[ $path ] ];
+				}
+			}
+		}
+	}
+
+	return $counts;
 }
 
 /**
@@ -2482,6 +2810,666 @@ function mcp_register_rankmath_abilities(): void {
 			},
 			'permission_callback' => function (): bool {
 				return current_user_can( 'edit_posts' );
+			},
+			'meta'                => array(
+				'annotations' => array(
+					'readonly'    => true,
+					'destructive' => false,
+					'idempotent'  => true,
+				),
+			),
+		)
+	);
+
+	// =========================================================================
+	// RANK MATH - Audit Content SEO
+	// =========================================================================
+	wp_register_ability(
+		'rankmath/audit-content-seo',
+		array(
+			'label'               => 'Audit Rank Math Content SEO',
+			'description'         => 'Find published content with missing Rank Math SEO fields, noindex robots, low stored SEO scores, missing schema, or weak internal inbound-link coverage.',
+			'category'            => 'site',
+			'input_schema'        => array(
+				'type'                 => 'object',
+				'properties'           => array(
+					'post_types'      => array(
+						'type'        => 'array',
+						'items'       => array( 'type' => 'string' ),
+						'description' => 'Post types to audit. Defaults to post and page.',
+					),
+					'post_statuses'   => array(
+						'type'        => 'array',
+						'items'       => array( 'type' => 'string' ),
+						'description' => 'Post statuses to audit. Defaults to publish.',
+					),
+					'per_page'        => array( 'type' => 'integer', 'default' => 50, 'minimum' => 1, 'maximum' => 200 ),
+					'page'            => array( 'type' => 'integer', 'default' => 1, 'minimum' => 1 ),
+					'search'          => array( 'type' => 'string' ),
+					'score_below'     => array( 'type' => 'integer', 'default' => 70, 'minimum' => 0, 'maximum' => 100 ),
+					'include_schema'  => array( 'type' => 'boolean', 'default' => true ),
+					'include_inbound' => array( 'type' => 'boolean', 'default' => false ),
+					'only_issues'     => array( 'type' => 'boolean', 'default' => true ),
+				),
+				'additionalProperties' => false,
+			),
+			'output_schema'       => array(
+				'type'       => 'object',
+				'properties' => array(
+					'success' => array( 'type' => 'boolean' ),
+					'items'   => array( 'type' => 'array' ),
+					'total'   => array( 'type' => 'integer' ),
+					'page'    => array( 'type' => 'integer' ),
+					'pages'   => array( 'type' => 'integer' ),
+					'counts'  => array( 'type' => 'object' ),
+				),
+			),
+			'execute_callback'    => function ( array $input = array() ): array {
+				if ( ! mcp_rankmath_is_active() ) {
+					return array( 'success' => false, 'message' => 'Rank Math SEO plugin is not active.' );
+				}
+
+				$post_types      = mcp_rankmath_get_content_audit_post_types( $input['post_types'] ?? array() );
+				$post_statuses   = mcp_rankmath_get_content_audit_statuses( $input['post_statuses'] ?? array() );
+				$per_page        = min( 200, max( 1, (int) ( $input['per_page'] ?? 50 ) ) );
+				$page            = max( 1, (int) ( $input['page'] ?? 1 ) );
+				$score_below     = min( 100, max( 0, (int) ( $input['score_below'] ?? 70 ) ) );
+				$include_schema  = array_key_exists( 'include_schema', $input ) ? (bool) $input['include_schema'] : true;
+				$include_inbound = ! empty( $input['include_inbound'] );
+				$only_issues     = array_key_exists( 'only_issues', $input ) ? (bool) $input['only_issues'] : true;
+
+				$args = array(
+					'post_type'              => $post_types,
+					'post_status'            => $post_statuses,
+					'posts_per_page'         => $per_page,
+					'paged'                  => $page,
+					'orderby'                => 'modified',
+					'order'                  => 'DESC',
+					'update_post_meta_cache' => true,
+					'update_post_term_cache' => false,
+				);
+
+				if ( ! current_user_can( 'edit_others_posts' ) ) {
+					$current_user   = wp_get_current_user();
+					$args['author'] = $current_user->ID;
+				}
+
+				if ( ! empty( $input['search'] ) ) {
+					$args['s'] = sanitize_text_field( (string) $input['search'] );
+				}
+
+				$query  = new WP_Query( $args );
+				$inbound_counts = $include_inbound ? mcp_rankmath_get_inbound_counts_for_posts( array_map( 'absint', wp_list_pluck( $query->posts, 'ID' ) ) ) : array();
+				$items  = array();
+				$counts = array(
+					'missing_seo_title'       => 0,
+					'missing_seo_description' => 0,
+					'missing_focus_keyword'   => 0,
+					'noindex'                 => 0,
+					'low_score'               => 0,
+					'missing_schema'          => 0,
+					'no_inbound_links'        => 0,
+				);
+
+				foreach ( $query->posts as $post ) {
+					if ( ! current_user_can( 'edit_post', $post->ID ) ) {
+						continue;
+					}
+
+					$issues          = array();
+					$seo_title       = (string) get_post_meta( $post->ID, 'rank_math_title', true );
+					$seo_description = (string) get_post_meta( $post->ID, 'rank_math_description', true );
+					$focus_keyword   = (string) get_post_meta( $post->ID, 'rank_math_focus_keyword', true );
+					$robots          = get_post_meta( $post->ID, 'rank_math_robots', true );
+					$robots          = is_array( $robots ) ? array_values( $robots ) : array();
+					$seo_score       = mcp_rankmath_get_seo_score( $post->ID );
+					$schema          = $include_schema ? mcp_rankmath_get_post_schema_meta( $post->ID ) : array();
+					$inbound_count   = $include_inbound ? (int) ( $inbound_counts[ $post->ID ] ?? 0 ) : null;
+
+					if ( '' === trim( $seo_title ) ) {
+						$issues[] = 'missing_seo_title';
+						++$counts['missing_seo_title'];
+					}
+					if ( '' === trim( $seo_description ) ) {
+						$issues[] = 'missing_seo_description';
+						++$counts['missing_seo_description'];
+					}
+					if ( '' === trim( $focus_keyword ) ) {
+						$issues[] = 'missing_focus_keyword';
+						++$counts['missing_focus_keyword'];
+					}
+					if ( in_array( 'noindex', $robots, true ) ) {
+						$issues[] = 'noindex';
+						++$counts['noindex'];
+					}
+					if ( null !== $seo_score && $seo_score < $score_below ) {
+						$issues[] = 'low_score';
+						++$counts['low_score'];
+					}
+					if ( $include_schema && empty( $schema ) ) {
+						$issues[] = 'missing_schema';
+						++$counts['missing_schema'];
+					}
+					if ( $include_inbound && 0 === $inbound_count ) {
+						$issues[] = 'no_inbound_links';
+						++$counts['no_inbound_links'];
+					}
+
+					if ( $only_issues && empty( $issues ) ) {
+						continue;
+					}
+
+					$items[] = array(
+						'id'              => (int) $post->ID,
+						'title'           => get_the_title( $post ),
+						'post_type'       => $post->post_type,
+						'post_status'     => $post->post_status,
+						'url'             => get_permalink( $post ),
+						'modified_gmt'    => $post->post_modified_gmt,
+						'seo_title'       => $seo_title,
+						'seo_description' => $seo_description,
+						'focus_keyword'   => $focus_keyword,
+						'seo_score'       => $seo_score,
+						'robots'          => $robots,
+						'has_schema'      => ! empty( $schema ),
+						'inbound_count'   => $inbound_count,
+						'issues'          => $issues,
+					);
+				}
+
+				return array(
+					'success' => true,
+					'items'   => $items,
+					'total'   => (int) $query->found_posts,
+					'page'    => $page,
+					'pages'   => (int) $query->max_num_pages,
+					'counts'  => $counts,
+				);
+			},
+			'permission_callback' => function (): bool {
+				return current_user_can( 'edit_posts' );
+			},
+			'meta'                => array(
+				'annotations' => array(
+					'readonly'    => true,
+					'destructive' => false,
+					'idempotent'  => true,
+				),
+			),
+		)
+	);
+
+	// =========================================================================
+	// RANK MATH - Get/Update Post Schema
+	// =========================================================================
+	wp_register_ability(
+		'rankmath/get-post-schema',
+		array(
+			'label'               => 'Get Rank Math Post Schema',
+			'description'         => 'Read Rank Math schema-related post meta for one post or page.',
+			'category'            => 'site',
+			'input_schema'        => array(
+				'type'                 => 'object',
+				'required'             => array( 'id' ),
+				'properties'           => array(
+					'id' => array( 'type' => 'integer', 'minimum' => 1 ),
+				),
+				'additionalProperties' => false,
+			),
+			'output_schema'       => array(
+				'type'       => 'object',
+				'properties' => array(
+					'success' => array( 'type' => 'boolean' ),
+					'id'      => array( 'type' => 'integer' ),
+					'title'   => array( 'type' => 'string' ),
+					'url'     => array( 'type' => 'string' ),
+					'schema'  => array( 'type' => 'object' ),
+					'message' => array( 'type' => 'string' ),
+				),
+			),
+			'execute_callback'    => function ( array $input ): array {
+				$post_id = absint( $input['id'] ?? 0 );
+				$result  = mcp_rankmath_get_post_or_error( $post_id, 'access' );
+				if ( empty( $result['success'] ) ) {
+					return $result;
+				}
+				$post = $result['post'];
+
+				return array(
+					'success' => true,
+					'id'      => $post_id,
+					'title'   => $post->post_title,
+					'url'     => get_permalink( $post_id ),
+					'schema'  => mcp_rankmath_get_post_schema_meta( $post_id ),
+				);
+			},
+			'permission_callback' => function (): bool {
+				return current_user_can( 'edit_posts' );
+			},
+			'meta'                => array(
+				'annotations' => array(
+					'readonly'    => true,
+					'destructive' => false,
+					'idempotent'  => true,
+				),
+			),
+		)
+	);
+
+	wp_register_ability(
+		'rankmath/update-post-schema',
+		array(
+			'label'               => 'Update Rank Math Post Schema',
+			'description'         => 'Update or delete Rank Math schema meta keys for one post. Only rank_math_schema_* keys can be written through this ability.',
+			'category'            => 'site',
+			'input_schema'        => array(
+				'type'                 => 'object',
+				'required'             => array( 'id' ),
+				'properties'           => array(
+					'id'             => array( 'type' => 'integer', 'minimum' => 1 ),
+					'schemas'        => array(
+						'type'                 => 'object',
+						'description'          => 'Object keyed by rank_math_schema_* meta key. Values may be objects, arrays, JSON strings, or strings.',
+						'additionalProperties' => true,
+					),
+					'delete_keys'    => array(
+						'type'  => 'array',
+						'items' => array( 'type' => 'string' ),
+					),
+					'confirm_delete' => array( 'type' => 'boolean', 'default' => false ),
+				),
+				'additionalProperties' => false,
+			),
+			'output_schema'       => array(
+				'type'       => 'object',
+				'properties' => array(
+					'success' => array( 'type' => 'boolean' ),
+					'id'      => array( 'type' => 'integer' ),
+					'updated' => array( 'type' => 'array' ),
+					'deleted' => array( 'type' => 'array' ),
+					'schema'  => array( 'type' => 'object' ),
+					'message' => array( 'type' => 'string' ),
+				),
+			),
+			'execute_callback'    => function ( array $input ): array {
+				$post_id = absint( $input['id'] ?? 0 );
+				$result  = mcp_rankmath_get_post_or_error( $post_id, 'edit' );
+				if ( empty( $result['success'] ) ) {
+					return $result;
+				}
+
+				$updated = array();
+				$deleted = array();
+
+				if ( isset( $input['schemas'] ) && is_array( $input['schemas'] ) ) {
+					foreach ( $input['schemas'] as $key => $value ) {
+						$key = trim( (string) $key );
+						if ( ! mcp_rankmath_is_schema_meta_key( $key ) ) {
+							return array( 'success' => false, 'message' => 'Schema meta key must match rank_math_schema_* and contain only letters, numbers, underscores, or hyphens.' );
+						}
+						update_post_meta( $post_id, $key, mcp_rankmath_sanitize_schema_value( $value ) );
+						$updated[] = $key;
+					}
+				}
+
+				if ( isset( $input['delete_keys'] ) && is_array( $input['delete_keys'] ) ) {
+					if ( empty( $input['confirm_delete'] ) ) {
+						return array( 'success' => false, 'message' => 'confirm_delete must be true when deleting schema keys.' );
+					}
+					foreach ( $input['delete_keys'] as $key ) {
+						$key = trim( (string) $key );
+						if ( ! mcp_rankmath_is_schema_meta_key( $key ) ) {
+							return array( 'success' => false, 'message' => 'Only valid rank_math_schema_* keys can be deleted.' );
+						}
+						delete_post_meta( $post_id, $key );
+						$deleted[] = $key;
+					}
+				}
+
+				if ( empty( $updated ) && empty( $deleted ) ) {
+					return array( 'success' => false, 'message' => 'No schema changes provided.' );
+				}
+
+				return array(
+					'success' => true,
+					'id'      => $post_id,
+					'updated' => $updated,
+					'deleted' => $deleted,
+					'schema'  => mcp_rankmath_get_post_schema_meta( $post_id ),
+				);
+			},
+			'permission_callback' => function (): bool {
+				return current_user_can( 'edit_posts' );
+			},
+			'meta'                => array(
+				'annotations' => array(
+					'readonly'    => false,
+					'destructive' => true,
+					'idempotent'  => true,
+				),
+			),
+		)
+	);
+
+	// =========================================================================
+	// RANK MATH - Primary Terms
+	// =========================================================================
+	wp_register_ability(
+		'rankmath/get-primary-term',
+		array(
+			'label'               => 'Get Rank Math Primary Term',
+			'description'         => 'Read the Rank Math primary term for a post and taxonomy, plus the assigned term list.',
+			'category'            => 'site',
+			'input_schema'        => array(
+				'type'                 => 'object',
+				'required'             => array( 'id' ),
+				'properties'           => array(
+					'id'       => array( 'type' => 'integer', 'minimum' => 1 ),
+					'taxonomy' => array( 'type' => 'string', 'default' => 'category' ),
+				),
+				'additionalProperties' => false,
+			),
+			'output_schema'       => array(
+				'type'       => 'object',
+				'properties' => array(
+					'success'         => array( 'type' => 'boolean' ),
+					'post_id'         => array( 'type' => 'integer' ),
+					'taxonomy'        => array( 'type' => 'string' ),
+					'primary_term_id' => array( 'type' => 'integer' ),
+					'primary_term'    => array( 'type' => array( 'object', 'null' ) ),
+					'terms'           => array( 'type' => 'array' ),
+					'message'         => array( 'type' => 'string' ),
+				),
+			),
+			'execute_callback'    => function ( array $input ): array {
+				$post_id = absint( $input['id'] ?? 0 );
+				$result  = mcp_rankmath_get_post_or_error( $post_id, 'access' );
+				if ( empty( $result['success'] ) ) {
+					return $result;
+				}
+
+				return mcp_rankmath_get_primary_term_data( $post_id, (string) ( $input['taxonomy'] ?? 'category' ) );
+			},
+			'permission_callback' => function (): bool {
+				return current_user_can( 'edit_posts' );
+			},
+			'meta'                => array(
+				'annotations' => array(
+					'readonly'    => true,
+					'destructive' => false,
+					'idempotent'  => true,
+				),
+			),
+		)
+	);
+
+	wp_register_ability(
+		'rankmath/update-primary-term',
+		array(
+			'label'               => 'Update Rank Math Primary Term',
+			'description'         => 'Set or clear the Rank Math primary term for a post and taxonomy.',
+			'category'            => 'site',
+			'input_schema'        => array(
+				'type'                 => 'object',
+				'required'             => array( 'id', 'taxonomy' ),
+				'properties'           => array(
+					'id'       => array( 'type' => 'integer', 'minimum' => 1 ),
+					'taxonomy' => array( 'type' => 'string' ),
+					'term_id'  => array( 'type' => 'integer', 'minimum' => 0, 'description' => 'Set 0 to clear the primary term.' ),
+				),
+				'additionalProperties' => false,
+			),
+			'output_schema'       => array(
+				'type'       => 'object',
+				'properties' => array(
+					'success' => array( 'type' => 'boolean' ),
+					'updated' => array( 'type' => 'boolean' ),
+					'status'  => array( 'type' => 'object' ),
+					'message' => array( 'type' => 'string' ),
+				),
+			),
+			'execute_callback'    => function ( array $input ): array {
+				$post_id  = absint( $input['id'] ?? 0 );
+				$taxonomy = sanitize_key( (string) ( $input['taxonomy'] ?? '' ) );
+				$term_id  = isset( $input['term_id'] ) ? absint( $input['term_id'] ) : 0;
+				$result   = mcp_rankmath_get_post_or_error( $post_id, 'edit' );
+				if ( empty( $result['success'] ) ) {
+					return $result;
+				}
+
+				$status = mcp_rankmath_get_primary_term_data( $post_id, $taxonomy );
+				if ( empty( $status['success'] ) ) {
+					return $status;
+				}
+
+				$meta_key = 'rank_math_primary_' . $taxonomy;
+				if ( 0 === $term_id ) {
+					delete_post_meta( $post_id, $meta_key );
+					return array(
+						'success' => true,
+						'updated' => true,
+						'status'  => mcp_rankmath_get_primary_term_data( $post_id, $taxonomy ),
+					);
+				}
+
+				$assigned_ids = array_map(
+					static function ( array $term ): int {
+						return (int) $term['id'];
+					},
+					$status['terms']
+				);
+
+				if ( ! in_array( $term_id, $assigned_ids, true ) ) {
+					return array( 'success' => false, 'message' => 'Term is not assigned to this post.' );
+				}
+
+				update_post_meta( $post_id, $meta_key, (string) $term_id );
+
+				return array(
+					'success' => true,
+					'updated' => true,
+					'status'  => mcp_rankmath_get_primary_term_data( $post_id, $taxonomy ),
+				);
+			},
+			'permission_callback' => function (): bool {
+				return current_user_can( 'edit_posts' );
+			},
+			'meta'                => array(
+				'annotations' => array(
+					'readonly'    => false,
+					'destructive' => false,
+					'idempotent'  => true,
+				),
+			),
+		)
+	);
+
+	// =========================================================================
+	// RANK MATH - Sitemap URLs and Redirect Match
+	// =========================================================================
+	wp_register_ability(
+		'rankmath/list-sitemap-urls',
+		array(
+			'label'               => 'List Rank Math Sitemap URLs',
+			'description'         => 'Fetch the Rank Math sitemap index and optionally child sitemap URLs for inspection.',
+			'category'            => 'site',
+			'input_schema'        => array(
+				'type'                 => 'object',
+				'properties'           => array(
+					'sitemap_path'     => array( 'type' => 'string', 'default' => '/sitemap_index.xml' ),
+					'include_children' => array( 'type' => 'boolean', 'default' => true ),
+					'limit'            => array( 'type' => 'integer', 'default' => 250, 'minimum' => 1, 'maximum' => 1000 ),
+				),
+				'additionalProperties' => false,
+			),
+			'output_schema'       => array(
+				'type'       => 'object',
+				'properties' => array(
+					'success'  => array( 'type' => 'boolean' ),
+					'index_url' => array( 'type' => 'string' ),
+					'sitemaps'  => array( 'type' => 'array' ),
+					'urls'      => array( 'type' => 'array' ),
+					'count'     => array( 'type' => 'integer' ),
+					'message'   => array( 'type' => 'string' ),
+				),
+			),
+			'execute_callback'    => function ( array $input = array() ): array {
+				$path             = isset( $input['sitemap_path'] ) ? (string) $input['sitemap_path'] : '/sitemap_index.xml';
+				$path             = '/' . ltrim( $path, '/' );
+				$include_children = array_key_exists( 'include_children', $input ) ? (bool) $input['include_children'] : true;
+				$limit            = min( 1000, max( 1, (int) ( $input['limit'] ?? 250 ) ) );
+				$index_url        = home_url( $path );
+				$response         = wp_remote_get( $index_url, array( 'timeout' => 20, 'redirection' => 3 ) );
+
+				if ( is_wp_error( $response ) ) {
+					return array( 'success' => false, 'message' => $response->get_error_message(), 'index_url' => $index_url );
+				}
+
+				$body     = (string) wp_remote_retrieve_body( $response );
+				$sitemaps = mcp_rankmath_parse_sitemap_locs( $body );
+				$urls     = array();
+
+				if ( ! $include_children ) {
+					$urls = $sitemaps;
+				} else {
+					foreach ( $sitemaps as $sitemap_url ) {
+						if ( count( $urls ) >= $limit ) {
+							break;
+						}
+
+						$child_host = wp_parse_url( $sitemap_url, PHP_URL_HOST );
+						$home_host  = wp_parse_url( home_url(), PHP_URL_HOST );
+						if ( $child_host && $home_host && strtolower( preg_replace( '/^www\./', '', $child_host ) ) !== strtolower( preg_replace( '/^www\./', '', $home_host ) ) ) {
+							continue;
+						}
+
+						$child = wp_remote_get( $sitemap_url, array( 'timeout' => 20, 'redirection' => 3 ) );
+						if ( is_wp_error( $child ) ) {
+							continue;
+						}
+						foreach ( mcp_rankmath_parse_sitemap_locs( (string) wp_remote_retrieve_body( $child ) ) as $url ) {
+							$urls[] = $url;
+							if ( count( $urls ) >= $limit ) {
+								break 2;
+							}
+						}
+					}
+				}
+
+				$urls = array_values( array_unique( $urls ) );
+
+				return array(
+					'success'  => true,
+					'index_url' => $index_url,
+					'sitemaps'  => $sitemaps,
+					'urls'      => $urls,
+					'count'     => count( $urls ),
+				);
+			},
+			'permission_callback' => function (): bool {
+				return current_user_can( 'edit_posts' );
+			},
+			'meta'                => array(
+				'annotations' => array(
+					'readonly'    => true,
+					'destructive' => false,
+					'idempotent'  => true,
+				),
+			),
+		)
+	);
+
+	wp_register_ability(
+		'rankmath/find-redirection',
+		array(
+			'label'               => 'Find Rank Math Redirection',
+			'description'         => 'Find Rank Math redirections whose source rules match one URL or path.',
+			'category'            => 'site',
+			'input_schema'        => array(
+				'type'                 => 'object',
+				'required'             => array( 'url' ),
+				'properties'           => array(
+					'url'         => array( 'type' => 'string' ),
+					'active_only' => array( 'type' => 'boolean', 'default' => true ),
+					'limit'       => array( 'type' => 'integer', 'default' => 20, 'minimum' => 1, 'maximum' => 100 ),
+				),
+				'additionalProperties' => false,
+			),
+			'output_schema'       => array(
+				'type'       => 'object',
+				'properties' => array(
+					'success' => array( 'type' => 'boolean' ),
+					'path'    => array( 'type' => 'string' ),
+					'matches' => array( 'type' => 'array' ),
+					'count'   => array( 'type' => 'integer' ),
+					'message' => array( 'type' => 'string' ),
+				),
+			),
+			'execute_callback'    => function ( array $input ): array {
+				global $wpdb;
+				$table = $wpdb->prefix . 'rank_math_redirections';
+				if ( ! mcp_rankmath_table_exists( $table ) ) {
+					return array( 'success' => false, 'message' => 'Rank Math redirections table not found.' );
+				}
+
+				$path = mcp_rankmath_normalized_redirection_path( (string) ( $input['url'] ?? '' ) );
+				if ( '' === $path ) {
+					return array( 'success' => false, 'message' => 'A valid URL path is required.' );
+				}
+
+				$active_only = array_key_exists( 'active_only', $input ) ? (bool) $input['active_only'] : true;
+				$limit       = min( 100, max( 1, (int) ( $input['limit'] ?? 20 ) ) );
+
+				if ( $active_only ) {
+					// phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching
+					$rows = $wpdb->get_results(
+						$wpdb->prepare(
+							'SELECT * FROM `' . esc_sql( $table ) . '` WHERE status = %s ORDER BY id DESC LIMIT %d',
+							'active',
+							1000
+						),
+						ARRAY_A
+					);
+				} else {
+					// phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching
+					$rows = $wpdb->get_results(
+						$wpdb->prepare(
+							'SELECT * FROM `' . esc_sql( $table ) . '` ORDER BY id DESC LIMIT %d',
+							1000
+						),
+						ARRAY_A
+					);
+				}
+				$matches = array();
+
+				foreach ( $rows as $row ) {
+					$sources = mcp_rankmath_decode_redirection_sources( $row['sources'] ?? '' );
+					foreach ( $sources as $source ) {
+						if ( is_array( $source ) && mcp_rankmath_redirection_source_matches_path( $source, $path ) ) {
+							$matches[] = array(
+								'id'          => (int) $row['id'],
+								'source'      => $source,
+								'destination' => (string) ( $row['url_to'] ?? '' ),
+								'header_code' => (int) ( $row['header_code'] ?? 0 ),
+								'status'      => (string) ( $row['status'] ?? '' ),
+								'hits'        => (int) ( $row['hits'] ?? 0 ),
+							);
+							if ( count( $matches ) >= $limit ) {
+								break 2;
+							}
+						}
+					}
+				}
+
+				return array(
+					'success' => true,
+					'path'    => $path,
+					'matches' => $matches,
+					'count'   => count( $matches ),
+				);
+			},
+			'permission_callback' => function (): bool {
+				return current_user_can( 'manage_options' );
 			},
 			'meta'                => array(
 				'annotations' => array(

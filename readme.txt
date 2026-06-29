@@ -4,7 +4,7 @@ Tags: seo, rank math, mcp, api, automation
 Requires at least: 6.9
 Tested up to: 7.0
 Requires PHP: 8.0
-Stable tag: 1.1.6
+Stable tag: 1.1.7
 License: GPLv2 or later
 License URI: https://www.gnu.org/licenses/gpl-2.0.html
 
@@ -57,6 +57,20 @@ This add-on plugin extends [MCP Expose Abilities](https://devenia.com/plugins/mc
 
 **rankmath/get-inbound-links** - Report internal inbound links to one target or list linked internal targets by scanning WordPress content and navigation menus.
 
+**rankmath/audit-content-seo** - Find content with missing SEO fields, noindex robots, low stored SEO scores, missing schema, or weak inbound links.
+
+**rankmath/get-post-schema** - Read Rank Math schema-related post meta for one post or page.
+
+**rankmath/update-post-schema** - Update or delete Rank Math `rank_math_schema_*` post meta for one post or page.
+
+**rankmath/get-primary-term** - Read the Rank Math primary term for a post taxonomy.
+
+**rankmath/update-primary-term** - Set or clear the Rank Math primary term for a post taxonomy.
+
+**rankmath/list-sitemap-urls** - Fetch sitemap index entries and child sitemap URLs.
+
+**rankmath/find-redirection** - Find Rank Math redirections matching one URL or path.
+
 **rankmath/list-404-logs** - List recent Rank Math 404 log entries.
 
 **rankmath/delete-404-logs** - Delete 404 log entries by ID.
@@ -87,6 +101,9 @@ This add-on plugin extends [MCP Expose Abilities](https://devenia.com/plugins/mc
 5. The abilities are now available via the MCP endpoint
 
 == Changelog ==
+
+= 1.1.7 =
+* Added: content SEO audit, post schema, primary term, sitemap URL, and redirection-match abilities for broader Rank Math automation.
 
 = 1.1.6 =
 * Added: `rankmath/get-inbound-links` builds an internal inbound-link report from WordPress content and navigation menus.
