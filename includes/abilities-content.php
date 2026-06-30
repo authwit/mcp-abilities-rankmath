@@ -1073,4 +1073,261 @@ function mcp_rankmath_register_content_abilities(): void {
 				),
 			)
 		);
+
+	// =========================================================================
+	// RANK MATH - Audit FAQ Answer Links
+	// =========================================================================
+	wp_register_ability(
+		'rankmath/audit-faq-links',
+		array(
+			'label'               => 'Audit Rank Math FAQ Links',
+			'description'         => 'Find Rank Math FAQ answers that contain anchors or escaped anchor markup. FAQ answers should remain plain text.',
+			'category'            => 'site',
+			'input_schema'        => array(
+				'type'                 => 'object',
+				'properties'           => array(
+					'post_types' => array(
+						'type'        => 'array',
+						'items'       => array( 'type' => 'string' ),
+						'description' => 'Post types to scan. Defaults to page and post.',
+					),
+					'statuses'   => array(
+						'type'        => 'array',
+						'items'       => array( 'type' => 'string' ),
+						'description' => 'Post statuses to scan. Defaults to publish, future, draft, pending, and private.',
+					),
+					'limit'      => array(
+						'type'        => 'integer',
+						'minimum'     => 1,
+						'maximum'     => 5000,
+						'default'     => 5000,
+						'description' => 'Maximum number of posts to scan.',
+					),
+				),
+				'additionalProperties' => false,
+			),
+			'output_schema'       => array(
+				'type'                 => 'object',
+				'properties'           => array(
+					'success'       => array( 'type' => 'boolean' ),
+					'scanned_count' => array( 'type' => 'integer' ),
+					'total_matches' => array( 'type' => 'integer' ),
+					'findings'      => array( 'type' => 'array' ),
+				),
+				'additionalProperties' => true,
+			),
+			'execute_callback'    => function ( array $input = array() ): array {
+				return mcp_rankmath_audit_faq_links( $input );
+			},
+			'permission_callback' => function (): bool {
+				return current_user_can( 'edit_posts' );
+			},
+			'meta'                => array(
+				'annotations' => array(
+					'readonly'    => true,
+					'destructive' => false,
+					'idempotent'  => true,
+				),
+			),
+		)
+	);
 	}
+
+/**
+ * Audit stored Rank Math FAQ blocks for links inside FAQ answers.
+ *
+ * @param array<string,mixed> $input Ability input.
+ * @return array<string,mixed>
+ */
+function mcp_rankmath_audit_faq_links( array $input = array() ): array {
+	$post_types = mcp_rankmath_sanitize_list( $input['post_types'] ?? array( 'page', 'post' ), array( 'page', 'post' ) );
+	$statuses   = mcp_rankmath_sanitize_list( $input['statuses'] ?? array( 'publish', 'future', 'draft', 'pending', 'private' ), array( 'publish', 'future', 'draft', 'pending', 'private' ) );
+	$limit      = min( 5000, max( 1, absint( $input['limit'] ?? 5000 ) ) );
+
+	$query = new WP_Query(
+		array(
+			'post_type'              => $post_types,
+			'post_status'            => $statuses,
+			'posts_per_page'         => $limit,
+			'fields'                 => 'ids',
+			'orderby'                => 'ID',
+			'order'                  => 'ASC',
+			'no_found_rows'          => false,
+			'update_post_meta_cache' => false,
+			'update_post_term_cache' => false,
+			's'                      => 'rank-math/faq-block',
+		)
+	);
+
+	$findings = array();
+	foreach ( $query->posts as $post_id ) {
+		$post = get_post( (int) $post_id );
+		if ( ! $post instanceof WP_Post ) {
+			continue;
+		}
+		foreach ( mcp_rankmath_faq_link_findings_for_content( (string) $post->post_content ) as $finding ) {
+			$finding['post_id']     = (int) $post->ID;
+			$finding['post_type']   = (string) $post->post_type;
+			$finding['post_status'] = (string) $post->post_status;
+			$finding['title']       = get_the_title( $post );
+			$finding['url']         = get_permalink( $post );
+			$findings[]             = $finding;
+		}
+	}
+
+	return array(
+		'success'       => empty( $findings ),
+		'scanned_count' => count( $query->posts ),
+		'total_matches' => count( $findings ),
+		'limit'         => $limit,
+		'findings'      => $findings,
+	);
+}
+
+/**
+ * Add Rank Math FAQ no-link guardrails to AI Translation QA when available.
+ *
+ * @param array<string,mixed> $result Current guardrail result.
+ * @param array<int,array<string,mixed>> $blocks Parsed block tree.
+ * @return array<string,mixed>
+ */
+function mcp_rankmath_faq_link_guardrails( array $result, array $blocks, string $content ): array {
+	unset( $blocks );
+	$issues = is_array( $result['issues'] ?? null ) ? $result['issues'] : array();
+	foreach ( mcp_rankmath_faq_link_findings_for_content( $content ) as $finding ) {
+		$issues[] = array(
+			'code'    => 'rankmath_faq_answer_link',
+			'message' => 'Rank Math FAQ answers must be plain text. Move links to normal paragraph or list blocks outside the FAQ item.',
+			'context' => $finding,
+		);
+	}
+	$result['issues'] = $issues;
+	return $result;
+}
+
+/**
+ * Remove Rank Math FAQ blocks before AI Translation semantic link parity.
+ *
+ * @param mixed $content Current content string.
+ * @return mixed
+ */
+function mcp_rankmath_exclude_faq_links_from_semantic_count( $content, array $blocks ) {
+	unset( $blocks );
+	if ( ! is_string( $content ) || false === strpos( $content, 'rank-math/faq-block' ) ) {
+		return $content;
+	}
+	return preg_replace( '/<!--\s+wp:rank-math\/faq-block\b[\s\S]*?<!--\s+\/wp:rank-math\/faq-block\s+-->/i', '', $content ) ?: $content;
+}
+
+/**
+ * Find FAQ answer links in parsed attributes and saved markup.
+ *
+ * @return array<int,array<string,mixed>>
+ */
+function mcp_rankmath_faq_link_findings_for_content( string $content ): array {
+	if ( false === strpos( $content, 'rank-math/faq-block' ) ) {
+		return array();
+	}
+
+	$findings = array();
+	mcp_rankmath_collect_faq_link_findings( parse_blocks( $content ), $findings );
+
+	$deduped = array();
+	$seen    = array();
+	foreach ( $findings as $finding ) {
+		$key = (string) ( $finding['index'] ?? '' ) . '|' . (string) ( $finding['excerpt'] ?? '' );
+		if ( isset( $seen[ $key ] ) ) {
+			continue;
+		}
+		$seen[ $key ] = true;
+		$deduped[]    = $finding;
+	}
+
+	return $deduped;
+}
+
+/**
+ * @param array<int,array<string,mixed>> $blocks Parsed block tree.
+ * @param array<int,array<string,mixed>> $findings Mutable findings list.
+ */
+function mcp_rankmath_collect_faq_link_findings( array $blocks, array &$findings ): void {
+	foreach ( $blocks as $block ) {
+		$name  = isset( $block['blockName'] ) && is_string( $block['blockName'] ) ? $block['blockName'] : '';
+		$attrs = isset( $block['attrs'] ) && is_array( $block['attrs'] ) ? $block['attrs'] : array();
+
+		if ( 'rank-math/faq-block' === $name ) {
+			$attribute_finding_indexes = array();
+			$questions = isset( $attrs['questions'] ) && is_array( $attrs['questions'] ) ? $attrs['questions'] : array();
+			foreach ( $questions as $index => $question ) {
+				if ( ! is_array( $question ) ) {
+					continue;
+				}
+				$content = isset( $question['content'] ) && is_string( $question['content'] ) ? $question['content'] : '';
+				if ( ! mcp_rankmath_faq_answer_contains_link_markup( $content ) ) {
+					continue;
+				}
+				$attribute_finding_indexes[ (int) $index ] = true;
+				$findings[] = array(
+					'source'      => 'block_attributes',
+					'question_id' => isset( $question['id'] ) ? (string) $question['id'] : '',
+					'question'    => isset( $question['title'] ) ? wp_strip_all_tags( (string) $question['title'] ) : '',
+					'index'       => (int) $index,
+					'excerpt'     => mcp_rankmath_text_excerpt( $content ),
+				);
+			}
+
+			$html = isset( $block['innerHTML'] ) && is_string( $block['innerHTML'] ) ? $block['innerHTML'] : '';
+			if ( preg_match_all( '/<div\b[^>]*class=(["\'])[^"\']*\brank-math-answer\b[^"\']*\1[^>]*>(.*?)<\/div>/is', $html, $matches, PREG_SET_ORDER ) ) {
+				foreach ( $matches as $index => $match ) {
+					if ( isset( $attribute_finding_indexes[ (int) $index ] ) ) {
+						continue;
+					}
+					$answer = (string) $match[2];
+					if ( ! mcp_rankmath_faq_answer_contains_link_markup( $answer ) ) {
+						continue;
+					}
+					$findings[] = array(
+						'source'  => 'saved_markup',
+						'index'   => (int) $index,
+						'excerpt' => mcp_rankmath_text_excerpt( $answer ),
+					);
+				}
+			}
+		}
+
+		if ( ! empty( $block['innerBlocks'] ) && is_array( $block['innerBlocks'] ) ) {
+			mcp_rankmath_collect_faq_link_findings( $block['innerBlocks'], $findings );
+		}
+	}
+}
+
+function mcp_rankmath_faq_answer_contains_link_markup( string $content ): bool {
+	return (bool) preg_match( '/<a\b|u003ca\b|\\\\u003ca\b/i', $content );
+}
+
+/**
+ * @param mixed $values Raw list.
+ * @param array<int,string> $fallback Fallback values.
+ * @return array<int,string>
+ */
+function mcp_rankmath_sanitize_list( $values, array $fallback ): array {
+	$values = is_array( $values ) ? $values : $fallback;
+	$clean  = array();
+	foreach ( $values as $value ) {
+		$value = sanitize_key( (string) $value );
+		if ( '' !== $value ) {
+			$clean[] = $value;
+		}
+	}
+	return $clean ? array_values( array_unique( $clean ) ) : $fallback;
+}
+
+function mcp_rankmath_text_excerpt( string $html ): string {
+	$text = wp_strip_all_tags( html_entity_decode( $html, ENT_QUOTES | ENT_HTML5, get_bloginfo( 'charset' ) ?: 'UTF-8' ) );
+	$text = preg_replace( '/\s+/u', ' ', $text );
+	$text = trim( is_string( $text ) ? $text : '' );
+	if ( function_exists( 'mb_substr' ) ) {
+		return mb_substr( $text, 0, 180, 'UTF-8' );
+	}
+	return substr( $text, 0, 180 );
+}

@@ -3,7 +3,7 @@
  * Plugin Name: MCP Abilities - Rank Math
  * Plugin URI: https://github.com/bjornfix/mcp-abilities-rankmath
  * Description: Rank Math SEO abilities for MCP. Get and update meta descriptions, titles, focus keywords, and other SEO settings.
- * Version: 1.1.8
+ * Version: 1.1.9
  * Author: basicus
  * Author URI: https://profiles.wordpress.org/basicus/
  * License: GPL-2.0+
@@ -1393,6 +1393,15 @@ require_once __DIR__ . '/includes/abilities-routes.php';
 require_once __DIR__ . '/includes/abilities-site.php';
 require_once __DIR__ . '/includes/abilities-content.php';
 require_once __DIR__ . '/includes/abilities-logs-redirections.php';
+
+/**
+ * Register optional integration hooks for other workflow plugins.
+ */
+function mcp_rankmath_register_integration_hooks(): void {
+	add_filter( 'ai_translation_workflow_gutenberg_guardrails', 'mcp_rankmath_faq_link_guardrails', 10, 3 );
+	add_filter( 'ai_translation_workflow_semantic_link_count_content', 'mcp_rankmath_exclude_faq_links_from_semantic_count', 10, 2 );
+}
+add_action( 'plugins_loaded', 'mcp_rankmath_register_integration_hooks', 30 );
 
 /**
  * Register Rank Math abilities.
