@@ -1075,13 +1075,13 @@ function mcp_rankmath_register_content_abilities(): void {
 		);
 
 	// =========================================================================
-	// RANK MATH - Audit FAQ Answer Links
+	// RANK MATH - Audit FAQ Integrity
 	// =========================================================================
 	wp_register_ability(
 		'rankmath/audit-faq-links',
 		array(
 			'label'               => 'Audit Rank Math FAQ Links',
-			'description'         => 'Find Rank Math FAQ answers that contain anchors or escaped anchor markup. FAQ answers should remain plain text.',
+			'description'         => 'Find Rank Math FAQ blocks with links, unparseable question attributes, or empty question/answer items. FAQ answers should remain plain text and blocks must render real items.',
 			'category'            => 'site',
 			'input_schema'        => array(
 				'type'                 => 'object',
@@ -1134,7 +1134,7 @@ function mcp_rankmath_register_content_abilities(): void {
 	}
 
 /**
- * Audit stored Rank Math FAQ blocks for links inside FAQ answers.
+ * Audit stored Rank Math FAQ blocks for links and parseable question data.
  *
  * @param array<string,mixed> $input Ability input.
  * @return array<string,mixed>
@@ -1165,7 +1165,7 @@ function mcp_rankmath_audit_faq_links( array $input = array() ): array {
 		if ( ! $post instanceof WP_Post ) {
 			continue;
 		}
-		foreach ( mcp_rankmath_faq_link_findings_for_content( (string) $post->post_content ) as $finding ) {
+		foreach ( mcp_rankmath_faq_integrity_findings_for_content( (string) $post->post_content ) as $finding ) {
 			$finding['post_id']     = (int) $post->ID;
 			$finding['post_type']   = (string) $post->post_type;
 			$finding['post_status'] = (string) $post->post_status;
@@ -1185,7 +1185,7 @@ function mcp_rankmath_audit_faq_links( array $input = array() ): array {
 }
 
 /**
- * Add Rank Math FAQ no-link guardrails to AI Translation QA when available.
+ * Add Rank Math FAQ integrity guardrails to AI Translation QA when available.
  *
  * @param array<string,mixed> $result Current guardrail result.
  * @param array<int,array<string,mixed>> $blocks Parsed block tree.
@@ -1194,10 +1194,20 @@ function mcp_rankmath_audit_faq_links( array $input = array() ): array {
 function mcp_rankmath_faq_link_guardrails( array $result, array $blocks, string $content ): array {
 	unset( $blocks );
 	$issues = is_array( $result['issues'] ?? null ) ? $result['issues'] : array();
-	foreach ( mcp_rankmath_faq_link_findings_for_content( $content ) as $finding ) {
+	foreach ( mcp_rankmath_faq_integrity_findings_for_content( $content ) as $finding ) {
+		$code    = isset( $finding['code'] ) ? (string) $finding['code'] : 'rankmath_faq_integrity';
+		$message = 'Rank Math FAQ blocks must have parseable questions and FAQ items must not contain links.';
+		if ( 'rankmath_faq_answer_link' === $code ) {
+			$message = 'Rank Math FAQ answers must be plain text. Move links to normal paragraph or list blocks outside the FAQ item.';
+		} elseif ( 'rankmath_faq_questions_unparseable' === $code ) {
+			$message = 'Rank Math FAQ blocks must have parseable question attributes. A visible heading plus broken FAQ markup must not pass QA.';
+		} elseif ( 'rankmath_faq_question_empty' === $code ) {
+			$message = 'Rank Math FAQ questions and answers must both be non-empty.';
+		}
+
 		$issues[] = array(
-			'code'    => 'rankmath_faq_answer_link',
-			'message' => 'Rank Math FAQ answers must be plain text. Move links to normal paragraph or list blocks outside the FAQ item.',
+			'code'    => $code,
+			'message' => $message,
 			'context' => $finding,
 		);
 	}
@@ -1220,22 +1230,22 @@ function mcp_rankmath_exclude_faq_links_from_semantic_count( $content, array $bl
 }
 
 /**
- * Find FAQ answer links in parsed attributes and saved markup.
+ * Find FAQ integrity problems in parsed attributes and saved markup.
  *
  * @return array<int,array<string,mixed>>
  */
-function mcp_rankmath_faq_link_findings_for_content( string $content ): array {
+function mcp_rankmath_faq_integrity_findings_for_content( string $content ): array {
 	if ( false === strpos( $content, 'rank-math/faq-block' ) ) {
 		return array();
 	}
 
 	$findings = array();
-	mcp_rankmath_collect_faq_link_findings( parse_blocks( $content ), $findings );
+	mcp_rankmath_collect_faq_integrity_findings( parse_blocks( $content ), $findings );
 
 	$deduped = array();
 	$seen    = array();
 	foreach ( $findings as $finding ) {
-		$key = (string) ( $finding['index'] ?? '' ) . '|' . (string) ( $finding['excerpt'] ?? '' );
+		$key = (string) ( $finding['code'] ?? '' ) . '|' . (string) ( $finding['source'] ?? '' ) . '|' . (string) ( $finding['index'] ?? '' ) . '|' . (string) ( $finding['excerpt'] ?? '' );
 		if ( isset( $seen[ $key ] ) ) {
 			continue;
 		}
@@ -1247,10 +1257,26 @@ function mcp_rankmath_faq_link_findings_for_content( string $content ): array {
 }
 
 /**
+ * Back-compat wrapper for callers that only care about FAQ answer links.
+ *
+ * @return array<int,array<string,mixed>>
+ */
+function mcp_rankmath_faq_link_findings_for_content( string $content ): array {
+	return array_values(
+		array_filter(
+			mcp_rankmath_faq_integrity_findings_for_content( $content ),
+			static function ( array $finding ): bool {
+				return 'rankmath_faq_answer_link' === (string) ( $finding['code'] ?? '' );
+			}
+		)
+	);
+}
+
+/**
  * @param array<int,array<string,mixed>> $blocks Parsed block tree.
  * @param array<int,array<string,mixed>> $findings Mutable findings list.
  */
-function mcp_rankmath_collect_faq_link_findings( array $blocks, array &$findings ): void {
+function mcp_rankmath_collect_faq_integrity_findings( array $blocks, array &$findings ): void {
 	foreach ( $blocks as $block ) {
 		$name  = isset( $block['blockName'] ) && is_string( $block['blockName'] ) ? $block['blockName'] : '';
 		$attrs = isset( $block['attrs'] ) && is_array( $block['attrs'] ) ? $block['attrs'] : array();
@@ -1258,19 +1284,45 @@ function mcp_rankmath_collect_faq_link_findings( array $blocks, array &$findings
 		if ( 'rank-math/faq-block' === $name ) {
 			$attribute_finding_indexes = array();
 			$questions = isset( $attrs['questions'] ) && is_array( $attrs['questions'] ) ? $attrs['questions'] : array();
+			if ( empty( $questions ) ) {
+				$findings[] = array(
+					'code'    => 'rankmath_faq_questions_unparseable',
+					'source'  => 'block_attributes',
+					'excerpt' => mcp_rankmath_text_excerpt( isset( $block['innerHTML'] ) && is_string( $block['innerHTML'] ) ? $block['innerHTML'] : '' ),
+				);
+			}
+
 			foreach ( $questions as $index => $question ) {
 				if ( ! is_array( $question ) ) {
+					$findings[] = array(
+						'code'    => 'rankmath_faq_question_empty',
+						'source'  => 'block_attributes',
+						'index'   => (int) $index,
+						'excerpt' => 'FAQ question record is not an object.',
+					);
 					continue;
 				}
 				$content = isset( $question['content'] ) && is_string( $question['content'] ) ? $question['content'] : '';
+				$title   = isset( $question['title'] ) && is_string( $question['title'] ) ? $question['title'] : '';
+				if ( '' === trim( wp_strip_all_tags( $title ) ) || '' === trim( wp_strip_all_tags( $content ) ) ) {
+					$findings[] = array(
+						'code'        => 'rankmath_faq_question_empty',
+						'source'      => 'block_attributes',
+						'question_id' => isset( $question['id'] ) ? (string) $question['id'] : '',
+						'question'    => wp_strip_all_tags( $title ),
+						'index'       => (int) $index,
+						'excerpt'     => mcp_rankmath_text_excerpt( $content ),
+					);
+				}
 				if ( ! mcp_rankmath_faq_answer_contains_link_markup( $content ) ) {
 					continue;
 				}
 				$attribute_finding_indexes[ (int) $index ] = true;
 				$findings[] = array(
+					'code'        => 'rankmath_faq_answer_link',
 					'source'      => 'block_attributes',
 					'question_id' => isset( $question['id'] ) ? (string) $question['id'] : '',
-					'question'    => isset( $question['title'] ) ? wp_strip_all_tags( (string) $question['title'] ) : '',
+					'question'    => wp_strip_all_tags( $title ),
 					'index'       => (int) $index,
 					'excerpt'     => mcp_rankmath_text_excerpt( $content ),
 				);
@@ -1287,6 +1339,7 @@ function mcp_rankmath_collect_faq_link_findings( array $blocks, array &$findings
 						continue;
 					}
 					$findings[] = array(
+						'code'    => 'rankmath_faq_answer_link',
 						'source'  => 'saved_markup',
 						'index'   => (int) $index,
 						'excerpt' => mcp_rankmath_text_excerpt( $answer ),
@@ -1296,7 +1349,7 @@ function mcp_rankmath_collect_faq_link_findings( array $blocks, array &$findings
 		}
 
 		if ( ! empty( $block['innerBlocks'] ) && is_array( $block['innerBlocks'] ) ) {
-			mcp_rankmath_collect_faq_link_findings( $block['innerBlocks'], $findings );
+			mcp_rankmath_collect_faq_integrity_findings( $block['innerBlocks'], $findings );
 		}
 	}
 }

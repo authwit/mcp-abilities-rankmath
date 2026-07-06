@@ -4,7 +4,7 @@ Tags: seo, rank math, mcp, api, automation
 Requires at least: 6.9
 Tested up to: 7.0
 Requires PHP: 8.0
-Stable tag: 1.1.9
+Stable tag: 1.1.10
 License: GPLv2 or later
 License URI: https://www.gnu.org/licenses/gpl-2.0.html
 
@@ -59,7 +59,7 @@ This add-on plugin extends [MCP Expose Abilities](https://devenia.com/plugins/mc
 
 **rankmath/audit-content-seo** - Find content with missing SEO fields, noindex robots, low stored SEO scores, missing schema, or weak inbound links.
 
-**rankmath/audit-faq-links** - Find Rank Math FAQ answers that contain links or escaped link markup, so FAQ answers can remain plain text.
+**rankmath/audit-faq-links** - Find Rank Math FAQ blocks with links, unparseable question attributes, or empty question/answer items, so FAQ blocks remain valid and visible.
 
 **rankmath/get-post-schema** - Read Rank Math schema-related post meta for one post or page.
 
@@ -103,6 +103,9 @@ This add-on plugin extends [MCP Expose Abilities](https://devenia.com/plugins/mc
 5. The abilities are now available via the MCP endpoint
 
 == Changelog ==
+
+= 1.1.10 =
+* Expanded `rankmath/audit-faq-links` and the AI Translation Workflow guardrail to catch unparseable or empty Rank Math FAQ questions in addition to disallowed FAQ item links.
 
 = 1.1.9 =
 * Added `rankmath/audit-faq-links` to find Rank Math FAQ answers that contain links or escaped link markup.
